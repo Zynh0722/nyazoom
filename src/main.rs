@@ -77,9 +77,8 @@ async fn upload(mut body: Multipart) -> Result<Redirect, (StatusCode, String)> {
             continue;
         };
 
-
         if !path_is_valid(&file_name) {
-            return Err((StatusCode::BAD_REQUEST, "Invalid Filename >:(".to_owned()))
+            return Err((StatusCode::BAD_REQUEST, "Invalid Filename >:(".to_owned()));
         }
 
         let path = cache_folder.join(file_name);
@@ -88,7 +87,9 @@ async fn upload(mut body: Multipart) -> Result<Redirect, (StatusCode, String)> {
         stream_to_file(&path, field).await?
     }
 
-    tracing::debug!("{cache_folder:?}");
+    remove_dir(cache_folder)
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
     Ok(Redirect::to("/"))
 }
@@ -131,7 +132,6 @@ fn path_is_valid(path: &str) -> bool {
     let mut components = Path::new(path).components().peekable();
 
     if let Some(first) = components.peek() {
-        tracing::debug!("{:?}", &first);
         if !matches!(first, std::path::Component::Normal(_)) {
             return false;
         }
