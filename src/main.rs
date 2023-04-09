@@ -1,7 +1,7 @@
+use std::io;
 use std::net::SocketAddr;
 use std::path::{Component, Path};
-use std::sync::Arc;
-use std::io;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
 use axum::http::StatusCode;
@@ -19,7 +19,6 @@ use rand::rngs::SmallRng;
 use rand::SeedableRng;
 use tokio::fs::File;
 use tokio::io::BufWriter;
-use tokio::sync::Mutex;
 use tokio::task::{spawn_blocking, JoinHandle};
 use tokio_util::io::StreamReader;
 use tower_http::{limit::RequestBodyLimitLayer, services::ServeDir, trace::TraceLayer};
@@ -165,9 +164,9 @@ where
             let path = entry.path();
 
             // This feels terribly wrong
-            spawn_blocking(|| async move {
+            spawn_blocking(move || {
                 let mut file = std::fs::File::open(path).unwrap();
-                let mut writer = writer.lock().await;
+                let mut writer = writer.lock().unwrap();
 
                 let options = zip::write::FileOptions::default()
                     .compression_method(zip::CompressionMethod::DEFLATE);
@@ -178,9 +177,22 @@ where
         })
         .collect();
 
-    join_all(zip_handles).await;
+    // let out: Vec<u64> = join_all(zip_handles)
+    //     .await
+    //     .iter()
+    //     .map(|v| { v.unwrap().join() })
+    //     .collect();
 
-    writer.lock().await.finish()?;
+    join_all(zip_handles)
+        .await
+        .iter()
+        .map(|v| {
+            v.as_ref().unwrap().as_ref().unwrap()
+        })
+        .for_each(|bytes| tracing::debug!("bytes written {bytes}"));
+
+
+    writer.lock().unwrap().finish()?;
 
     Ok(())
 }
