@@ -1,6 +1,7 @@
-use std::io;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path};
+use std::sync::Arc;
+use std::io;
 
 use axum::body::Bytes;
 use axum::http::StatusCode;
@@ -11,16 +12,20 @@ use axum::{
     response::Redirect,
     Router,
 };
+use futures::future::join_all;
 use futures::{Stream, TryStreamExt};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
 use tokio::fs::File;
 use tokio::io::BufWriter;
+use tokio::sync::Mutex;
+use tokio::task::{spawn_blocking, JoinHandle};
 use tokio_util::io::StreamReader;
 use tower_http::{limit::RequestBodyLimitLayer, services::ServeDir, trace::TraceLayer};
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use zip::ZipWriter;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -34,6 +39,7 @@ async fn main() -> io::Result<()> {
 
     // uses create_dir_all to create both .cache and .temp inside it in one go
     make_dir(".cache/.temp").await?;
+    make_dir(".cache/serve").await?;
 
     // Router Setup
     let with_big_body = Router::new()
@@ -45,7 +51,7 @@ async fn main() -> io::Result<()> {
 
     let base = Router::new()
         .nest_service("/", ServeDir::new("dist"))
-        .nest_service("/download", ServeDir::new(".cache"));
+        .nest_service("/download", ServeDir::new(".cache/serve"));
 
     let app = Router::new()
         .merge(with_big_body)
@@ -64,7 +70,8 @@ async fn main() -> io::Result<()> {
 }
 
 async fn upload(mut body: Multipart) -> Result<Redirect, (StatusCode, String)> {
-    let cache_folder = Path::new(".cache/.temp").join(get_random_name(10));
+    let cache_name = get_random_name(10);
+    let cache_folder = Path::new(".cache/.temp").join(cache_name);
 
     make_dir(&cache_folder)
         .await
@@ -86,6 +93,10 @@ async fn upload(mut body: Multipart) -> Result<Redirect, (StatusCode, String)> {
         tracing::debug!("\n\nstuff written to {path:?}\n");
         stream_to_file(&path, field).await?
     }
+
+    zip_dir(&cache_folder)
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
     remove_dir(cache_folder)
         .await
@@ -116,6 +127,62 @@ where
     }
     .await
     .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+}
+
+async fn zip_dir<T>(folder: T) -> io::Result<()>
+where
+    T: AsRef<Path> + Send,
+{
+    let file_name =
+        if let Component::Normal(file_name) = folder.as_ref().components().last().unwrap() {
+            // This should be alphanumeric already
+            file_name.to_str().unwrap().to_owned()
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Failed Creating Zip File",
+            ));
+        };
+
+    // let mut file = File::create(file_name).await.unwrap();
+
+    let file_name = Path::new(".cache/serve").join(format!("{file_name}.zip"));
+
+    let file = spawn_blocking(move || std::fs::File::create(file_name)).await??;
+    let writer = Arc::new(Mutex::new(ZipWriter::new(file)));
+
+    let folder = folder.as_ref().to_owned();
+
+    let directories = spawn_blocking(move || std::fs::read_dir(folder)).await??;
+
+    tracing::debug!("Made it to zip!");
+
+    let zip_handles: Vec<JoinHandle<_>> = directories
+        .map(|entry| entry.unwrap())
+        // .map(|file_name| ZipEntryBuilder::new(file_name, Compression::Deflate))
+        .map(|entry| {
+            let writer = writer.clone();
+            let path = entry.path();
+
+            // This feels terribly wrong
+            spawn_blocking(|| async move {
+                let mut file = std::fs::File::open(path).unwrap();
+                let mut writer = writer.lock().await;
+
+                let options = zip::write::FileOptions::default()
+                    .compression_method(zip::CompressionMethod::DEFLATE);
+                writer.start_file(entry.file_name().to_str().unwrap().to_owned(), options)?;
+
+                std::io::copy(&mut file, &mut *writer)
+            })
+        })
+        .collect();
+
+    join_all(zip_handles).await;
+
+    writer.lock().await.finish()?;
+
+    Ok(())
 }
 
 async fn remove_dir<T>(folder: T) -> io::Result<()>
