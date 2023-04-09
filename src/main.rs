@@ -59,7 +59,7 @@ async fn main() -> io::Result<()> {
 
     // Server creation
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    tracing::debug!("listening on {}", addr);
+    tracing::debug!("listening on http://{}/", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
@@ -89,14 +89,16 @@ async fn upload(mut body: Multipart) -> Result<Redirect, (StatusCode, String)> {
 
         let path = cache_folder.join(file_name);
 
-        tracing::debug!("\n\nstuff written to {path:?}\n");
+        tracing::debug!("Caching: {path:?}");
         stream_to_file(&path, field).await?
     }
 
+    tracing::debug!("Zipping: {:?}", &cache_folder);
     zip_dir(&cache_folder)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
+    tracing::debug!("Cleaning up: {:?}", &cache_folder);
     remove_dir(cache_folder)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
@@ -147,14 +149,12 @@ where
 
     let file_name = Path::new(".cache/serve").join(format!("{file_name}.zip"));
 
-    let file = spawn_blocking(move || std::fs::File::create(file_name)).await??;
+    let file = spawn_blocking(move || std::fs::File::create(&file_name)).await??;
     let writer = Arc::new(Mutex::new(ZipWriter::new(file)));
 
     let folder = folder.as_ref().to_owned();
 
     let directories = spawn_blocking(move || std::fs::read_dir(folder)).await??;
-
-    tracing::debug!("Made it to zip!");
 
     let zip_handles: Vec<JoinHandle<_>> = directories
         .map(|entry| entry.unwrap())
@@ -176,13 +176,19 @@ where
         })
         .collect();
 
-    join_all(zip_handles)
+    let bytes_written: u64 = join_all(zip_handles)
         .await
         .iter()
-        .map(|v| v.as_ref().unwrap().as_ref().unwrap())
-        .for_each(|bytes| tracing::debug!("bytes written {bytes}"));
+        .map(|v| v.as_ref().unwrap().as_ref().unwrap().clone())
+        .sum();
 
-    writer.lock().unwrap().finish()?;
+    let final_bytes = writer.lock().unwrap().finish()?.metadata()?.len();
+
+    tracing::debug!(
+        "File Zipped: {} -- {} saved",
+        bytes_to_human_readable(final_bytes),
+        bytes_to_human_readable(bytes_written - final_bytes)
+    );
 
     Ok(())
 }
@@ -227,4 +233,18 @@ fn get_random_name(len: usize) -> String {
     let mut rng = SmallRng::from_entropy();
 
     Alphanumeric.sample_string(&mut rng, len)
+}
+
+#[inline]
+fn bytes_to_human_readable(bytes: u64) -> String {
+    let mut running = bytes as f64;
+    let mut count = 0;
+    while running > 1024.0 && count <= 6 {
+        running /= 1024.0;
+        count += 1;
+    }
+
+    let prefixes = ["K", "M", "G", "T", "P", "E"];
+
+    format!("{:.2} {}iB", running, prefixes[count - 1])
 }
