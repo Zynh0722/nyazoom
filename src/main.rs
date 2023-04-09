@@ -145,8 +145,6 @@ where
             ));
         };
 
-    // let mut file = File::create(file_name).await.unwrap();
-
     let file_name = Path::new(".cache/serve").join(format!("{file_name}.zip"));
 
     let file = spawn_blocking(move || std::fs::File::create(&file_name)).await??;
@@ -158,7 +156,6 @@ where
 
     let zip_handles: Vec<JoinHandle<_>> = directories
         .map(|entry| entry.unwrap())
-        // .map(|file_name| ZipEntryBuilder::new(file_name, Compression::Deflate))
         .map(|entry| {
             let writer = writer.clone();
             let path = entry.path();
@@ -169,7 +166,15 @@ where
 
                 let options = zip::write::FileOptions::default()
                     .compression_method(zip::CompressionMethod::DEFLATE);
-                writer.start_file(entry.file_name().to_str().unwrap().to_owned(), options)?;
+                writer.start_file(
+                    entry.file_name().to_str().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            "Filename not valid unicode".to_owned(),
+                        )
+                    })?,
+                    options,
+                )?;
 
                 std::io::copy(&mut file, &mut *writer)
             })
@@ -235,6 +240,14 @@ fn get_random_name(len: usize) -> String {
     Alphanumeric.sample_string(&mut rng, len)
 }
 
+static UNITS: [&str; 6] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+// This function is actually rather interesting to me, I understand that rust is
+// very powerful, and its very safe, but i find it rather amusing that the [] operator
+// doesn't check bounds, meaning it can panic at runtime. Usually rust is very
+// very careful about possible panics
+//
+// although this function shouldn't be able to panic at runtime due to known bounds
+// being listened to
 #[inline]
 fn bytes_to_human_readable(bytes: u64) -> String {
     let mut running = bytes as f64;
@@ -244,7 +257,5 @@ fn bytes_to_human_readable(bytes: u64) -> String {
         count += 1;
     }
 
-    let prefixes = ["K", "M", "G", "T", "P", "E"];
-
-    format!("{:.2} {}iB", running, prefixes[count - 1])
+    format!("{:.2} {}", running, UNITS[count - 1])
 }
