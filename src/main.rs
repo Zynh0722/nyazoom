@@ -163,7 +163,6 @@ where
             let writer = writer.clone();
             let path = entry.path();
 
-            // This feels terribly wrong
             spawn_blocking(move || {
                 let mut file = std::fs::File::open(path).unwrap();
                 let mut writer = writer.lock().unwrap();
@@ -177,20 +176,11 @@ where
         })
         .collect();
 
-    // let out: Vec<u64> = join_all(zip_handles)
-    //     .await
-    //     .iter()
-    //     .map(|v| { v.unwrap().join() })
-    //     .collect();
-
     join_all(zip_handles)
         .await
         .iter()
-        .map(|v| {
-            v.as_ref().unwrap().as_ref().unwrap()
-        })
+        .map(|v| v.as_ref().unwrap().as_ref().unwrap())
         .for_each(|bytes| tracing::debug!("bytes written {bytes}"));
-
 
     writer.lock().unwrap().finish()?;
 
