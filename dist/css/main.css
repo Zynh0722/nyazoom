@@ -40,6 +40,7 @@ body {
 #cat-fact {
     max-width: 25em;
     padding: 0 1em;
+    text-align: center;
 }
 
 [type="file"] {

@@ -1,30 +1,32 @@
-use std::io;
-use std::net::SocketAddr;
-use std::path::{Component, Path};
-use std::sync::{Arc, Mutex};
+use async_zip::tokio::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
 
-use axum::body::Bytes;
 use axum::http::StatusCode;
 use axum::routing::post;
-use axum::BoxError;
 use axum::{
     extract::{DefaultBodyLimit, Multipart},
     response::Redirect,
     Router,
 };
-use futures::future::join_all;
-use futures::{Stream, TryStreamExt};
+
+use futures::TryStreamExt;
+
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
-use tokio::fs::File;
-use tokio::io::BufWriter;
-use tokio::task::{spawn_blocking, JoinHandle};
+
+use sanitize_filename_reader_friendly::sanitize;
+
+use std::io;
+use std::net::SocketAddr;
+use std::path::Path;
+
+use tokio_util::compat::FuturesAsyncWriteCompatExt;
 use tokio_util::io::StreamReader;
+
 use tower_http::{limit::RequestBodyLimitLayer, services::ServeDir, trace::TraceLayer};
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use zip::ZipWriter;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -42,7 +44,7 @@ async fn main() -> io::Result<()> {
 
     // Router Setup
     let with_big_body = Router::new()
-        .route("/upload", post(upload))
+        .route("/upload", post(upload_to_zip))
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(
             10 * 1024 * 1024 * 1024, // 10GiB
@@ -68,143 +70,55 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
-async fn upload(mut body: Multipart) -> Result<Redirect, (StatusCode, String)> {
+async fn upload_to_zip(mut body: Multipart) -> Result<Redirect, (StatusCode, String)> {
     let cache_name = get_random_name(10);
-    let cache_folder = Path::new(".cache/.temp").join(cache_name);
 
-    make_dir(&cache_folder)
+    let archive_path = Path::new(".cache/serve").join(&format!("{}.zip", &cache_name));
+    tracing::debug!("Zipping: {:?}", &archive_path);
+
+    let mut archive = tokio::fs::File::create(archive_path)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    let mut writer = ZipFileWriter::new(&mut archive);
 
     while let Some(field) = body.next_field().await.unwrap() {
-        let file_name = if let Some(file_name) = field.file_name() {
-            file_name.to_owned()
-        } else {
-            continue;
+        let file_name = match field.file_name() {
+            Some(file_name) => sanitize(file_name),
+            _ => continue,
         };
 
         if !path_is_valid(&file_name) {
             return Err((StatusCode::BAD_REQUEST, "Invalid Filename >:(".to_owned()));
         }
 
-        let path = cache_folder.join(file_name);
+        tracing::debug!("Downloading to Zip: {file_name:?}");
 
-        tracing::debug!("Caching: {path:?}");
-        stream_to_file(&path, field).await?
-    }
-
-    tracing::debug!("Zipping: {:?}", &cache_folder);
-    zip_dir(&cache_folder)
-        .await
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-
-    tracing::debug!("Cleaning up: {:?}", &cache_folder);
-    remove_dir(cache_folder)
-        .await
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-
-    Ok(Redirect::to("/"))
-}
-
-async fn stream_to_file<S, E, P>(path: P, stream: S) -> Result<(), (StatusCode, String)>
-where
-    P: AsRef<Path>,
-    S: Stream<Item = Result<Bytes, E>>,
-    E: Into<BoxError>,
-{
-    async {
-        // Convert the stream into an `AsyncRead`.
+        let stream = field;
         let body_with_io_error = stream.map_err(|err| io::Error::new(io::ErrorKind::Other, err));
         let body_reader = StreamReader::new(body_with_io_error);
         futures::pin_mut!(body_reader);
 
-        // Create the file. `File` implements `AsyncWrite`.
-        let mut file = BufWriter::new(File::create(&path).await?);
+        let builder = ZipEntryBuilder::new(file_name, Compression::Deflate);
+        let mut entry_writer = writer
+            .write_entry_stream(builder)
+            .await
+            .unwrap()
+            .compat_write();
 
-        // Copy the body into the file.
-        tokio::io::copy(&mut body_reader, &mut file).await?;
+        tokio::io::copy(&mut body_reader, &mut entry_writer)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
-        io::Result::Ok(())
+        entry_writer
+            .into_inner()
+            .close()
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     }
-    .await
-    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
-}
 
-async fn zip_dir<T>(folder: T) -> io::Result<()>
-where
-    T: AsRef<Path> + Send,
-{
-    let file_name =
-        if let Component::Normal(file_name) = folder.as_ref().components().last().unwrap() {
-            // This should be alphanumeric already
-            file_name.to_str().unwrap().to_owned()
-        } else {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Failed Creating Zip File",
-            ));
-        };
+    writer.close().await.unwrap();
 
-    let file_name = Path::new(".cache/serve").join(format!("{file_name}.zip"));
-
-    let file = spawn_blocking(move || std::fs::File::create(&file_name)).await??;
-    let writer = Arc::new(Mutex::new(ZipWriter::new(file)));
-
-    let folder = folder.as_ref().to_owned();
-
-    let directories = spawn_blocking(move || std::fs::read_dir(folder)).await??;
-
-    let zip_handles: Vec<JoinHandle<_>> = directories
-        .map(|entry| entry.unwrap())
-        .map(|entry| {
-            let writer = writer.clone();
-            let path = entry.path();
-
-            spawn_blocking(move || {
-                let mut file = std::fs::File::open(path).unwrap();
-                let mut writer = writer.lock().unwrap();
-
-                let options = zip::write::FileOptions::default()
-                    .compression_method(zip::CompressionMethod::DEFLATE);
-                writer.start_file(
-                    entry.file_name().to_str().ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            "Filename not valid unicode".to_owned(),
-                        )
-                    })?,
-                    options,
-                )?;
-
-                std::io::copy(&mut file, &mut *writer)
-            })
-        })
-        .collect();
-
-    let bytes_written: u64 = join_all(zip_handles)
-        .await
-        .iter()
-        .map(|v| v.as_ref().unwrap().as_ref().unwrap().clone())
-        .sum();
-
-    let final_bytes = writer.lock().unwrap().finish()?.metadata()?.len();
-
-    tracing::debug!(
-        "File Zipped: {} -- {} saved",
-        bytes_to_human_readable(final_bytes),
-        bytes_to_human_readable(bytes_written - final_bytes)
-    );
-
-    Ok(())
-}
-
-async fn remove_dir<T>(folder: T) -> io::Result<()>
-where
-    T: AsRef<Path>,
-{
-    tokio::fs::remove_dir_all(&folder).await?;
-
-    Ok(())
+    Ok(Redirect::to(&format!("/link.html?link={}.zip", cache_name)))
 }
 
 #[inline]
@@ -240,6 +154,7 @@ fn get_random_name(len: usize) -> String {
     Alphanumeric.sample_string(&mut rng, len)
 }
 
+#[allow(dead_code)]
 static UNITS: [&str; 6] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
 // This function is actually rather interesting to me, I understand that rust is
 // very powerful, and its very safe, but i find it rather amusing that the [] operator
@@ -249,7 +164,7 @@ static UNITS: [&str; 6] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
 // although this function shouldn't be able to panic at runtime due to known bounds
 // being listened to
 #[inline]
-fn bytes_to_human_readable(bytes: u64) -> String {
+fn _bytes_to_human_readable(bytes: u64) -> String {
     let mut running = bytes as f64;
     let mut count = 0;
     while running > 1024.0 && count <= 6 {
@@ -258,4 +173,12 @@ fn bytes_to_human_readable(bytes: u64) -> String {
     }
 
     format!("{:.2} {}", running, UNITS[count - 1])
+}
+
+pub mod error {
+    use std::io::{Error, ErrorKind};
+
+    pub fn io_other(s: &str) -> Error {
+        Error::new(ErrorKind::Other, s)
+    }
 }

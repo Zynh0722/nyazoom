@@ -1,12 +1,37 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <title></title>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <link href="css/link.css" rel="stylesheet">
-    </head>
-    <body>
-    
-    </body>
+
+<head>
+    <title></title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="css/link.css" rel="stylesheet">
+
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            const params = new Proxy(new URLSearchParams(window.location.search), {
+                get: (searchParams, prop) => searchParams.get(prop),
+            });
+
+
+            if (params.link !== null) {
+                let link = `${window.location.origin}/download/${params.link}`;
+
+                let link_el = document.getElementById("link");
+
+                link_el.href = link;
+                link_el.innerHTML = link;
+            }
+        });
+    </script>
+</head>
+
+<body>
+    <div class="link-wrapper">
+        <a id="link" href=""></a>
+    </div>
+
+    <a href="/" class="return-button">Return to home</a>
+</body>
+
 </html>
