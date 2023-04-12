@@ -87,10 +87,6 @@ async fn upload_to_zip(mut body: Multipart) -> Result<Redirect, (StatusCode, Str
             _ => continue,
         };
 
-        if !path_is_valid(&file_name) {
-            return Err((StatusCode::BAD_REQUEST, "Invalid Filename >:(".to_owned()));
-        }
-
         tracing::debug!("Downloading to Zip: {file_name:?}");
 
         let stream = field;
@@ -119,19 +115,6 @@ async fn upload_to_zip(mut body: Multipart) -> Result<Redirect, (StatusCode, Str
     writer.close().await.unwrap();
 
     Ok(Redirect::to(&format!("/link.html?link={}.zip", cache_name)))
-}
-
-#[inline]
-fn path_is_valid(path: &str) -> bool {
-    let mut components = Path::new(path).components().peekable();
-
-    if let Some(first) = components.peek() {
-        if !matches!(first, std::path::Component::Normal(_)) {
-            return false;
-        }
-    }
-
-    components.count() == 1
 }
 
 #[inline]
