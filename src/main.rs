@@ -10,7 +10,6 @@ use axum::{
     Router,
 };
 
-use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 
 use rand::distributions::{Alphanumeric, DistString};
@@ -18,64 +17,26 @@ use rand::rngs::SmallRng;
 use rand::SeedableRng;
 
 use sanitize_filename_reader_friendly::sanitize;
-use serde::{Deserialize, Serialize};
+
+use serde::Serialize;
+
 use tokio::io::AsyncReadExt;
-use tokio::sync::Mutex;
+use tokio_util::compat::FuturesAsyncWriteCompatExt;
 
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 
-use tokio_util::compat::FuturesAsyncWriteCompatExt;
 use tokio_util::io::StreamReader;
 
 use tower_http::{limit::RequestBodyLimitLayer, services::ServeDir, trace::TraceLayer};
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
-struct UploadRecord {
-    uploaded: DateTime<Utc>,
-    file: PathBuf,
-    downloads: u8,
-    max_downloads: u8,
-}
+mod state;
 
-impl UploadRecord {
-    fn new(file: PathBuf) -> Self {
-        Self {
-            file,
-            ..Default::default()
-        }
-    }
-}
-
-impl Default for UploadRecord {
-    fn default() -> Self {
-        Self {
-            uploaded: Utc::now(),
-            file: Path::new("").to_owned(),
-            downloads: 0,
-            max_downloads: 5,
-        }
-    }
-}
-
-#[derive(Clone)]
-struct AppState {
-    records: Arc<Mutex<HashMap<String, UploadRecord>>>,
-}
-
-impl AppState {
-    fn new(records: HashMap<String, UploadRecord>) -> Self {
-        Self {
-            records: Arc::new(Mutex::new(records)),
-        }
-    }
-}
+use state::{AppState, UploadRecord};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
