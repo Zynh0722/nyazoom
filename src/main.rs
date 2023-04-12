@@ -38,6 +38,14 @@ mod state;
 
 use state::{AppState, UploadRecord};
 
+pub mod error {
+    use std::io::{Error, ErrorKind};
+
+    pub fn io_other(s: &str) -> Error {
+        Error::new(ErrorKind::Other, s)
+    }
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     // Set up logging
@@ -162,35 +170,6 @@ fn get_random_name(len: usize) -> String {
     Alphanumeric.sample_string(&mut rng, len)
 }
 
-#[allow(dead_code)]
-static UNITS: [&str; 6] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
-// This function is actually rather interesting to me, I understand that rust is
-// very powerful, and its very safe, but i find it rather amusing that the [] operator
-// doesn't check bounds, meaning it can panic at runtime. Usually rust is very
-// very careful about possible panics
-//
-// although this function shouldn't be able to panic at runtime due to known bounds
-// being listened to
-#[inline]
-fn _bytes_to_human_readable(bytes: u64) -> String {
-    let mut running = bytes as f64;
-    let mut count = 0;
-    while running > 1024.0 && count <= 6 {
-        running /= 1024.0;
-        count += 1;
-    }
-
-    format!("{:.2} {}", running, UNITS[count - 1])
-}
-
-pub mod error {
-    use std::io::{Error, ErrorKind};
-
-    pub fn io_other(s: &str) -> Error {
-        Error::new(ErrorKind::Other, s)
-    }
-}
-
 async fn write_to_cache<T, Y>(records: &HashMap<T, Y>) -> io::Result<()>
 where
     T: Serialize,
@@ -220,4 +199,25 @@ async fn fetch_cache() -> AppState {
     };
 
     AppState::new(records)
+}
+
+#[allow(dead_code)]
+static UNITS: [&str; 6] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+// This function is actually rather interesting to me, I understand that rust is
+// very powerful, and its very safe, but i find it rather amusing that the [] operator
+// doesn't check bounds, meaning it can panic at runtime. Usually rust is very
+// very careful about possible panics
+//
+// although this function shouldn't be able to panic at runtime due to known bounds
+// being listened to
+#[inline]
+fn _bytes_to_human_readable(bytes: u64) -> String {
+    let mut running = bytes as f64;
+    let mut count = 0;
+    while running > 1024.0 && count <= 6 {
+        running /= 1024.0;
+        count += 1;
+    }
+
+    format!("{:.2} {}", running, UNITS[count - 1])
 }
