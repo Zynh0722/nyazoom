@@ -6,13 +6,15 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-bincode = { version = "0.7.0", features = ["tokio"] }
 async_zip = { version = "0.0.13", features = ["deflate", "tokio", "tokio-fs", "async-compression"] }
 axum = { version = "0.6.12", features = ["multipart", "http2"] }
 bincode = "1.3.3"
+chrono = { version = "0.4.24", features = ["serde"] }
 futures = "0.3.28"
 rand = { version = "0.8.5", features = ["small_rng"] }
 sanitize-filename-reader-friendly = "2.2.1"
-serde = { version = "1.0.160", features = ["serde_derive"] }
+serde = { version = "1.0.160", features = ["serde_derive", "derive"] }
 serde_derive = "1.0.160"
 tokio = { version = "1.27.0", features = ["full"] }
 tokio-util = { version = "0.7.7", features = ["io"] }
