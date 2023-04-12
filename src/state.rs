@@ -24,6 +24,10 @@ impl UploadRecord {
             ..Default::default()
         }
     }
+
+    pub fn can_be_downloaded(&self) -> bool {
+        self.downloads < self.max_downloads
+    }
 }
 
 impl Default for UploadRecord {
@@ -32,7 +36,7 @@ impl Default for UploadRecord {
             uploaded: Utc::now(),
             file: Path::new("").to_owned(),
             downloads: 0,
-            max_downloads: 5,
+            max_downloads: 1,
         }
     }
 }

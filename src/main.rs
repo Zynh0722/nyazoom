@@ -1,9 +1,11 @@
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 
+use axum::body::StreamBody;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::post;
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
 use axum::{
     extract::{DefaultBodyLimit, Multipart},
     response::Redirect,
@@ -28,7 +30,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
 
-use tokio_util::io::StreamReader;
+use tokio_util::io::{ReaderStream, StreamReader};
 
 use tower_http::{limit::RequestBodyLimitLayer, services::ServeDir, trace::TraceLayer};
 
@@ -63,21 +65,15 @@ async fn main() -> io::Result<()> {
     let state = fetch_cache().await;
 
     // Router Setup
-    let with_big_body = Router::new()
+    let app = Router::new()
         .route("/upload", post(upload_to_zip))
+        .route("/download/:id", get(download))
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(
             10 * 1024 * 1024 * 1024, // 10GiB
         ))
-        .with_state(state);
-
-    let base = Router::new()
+        .with_state(state)
         .nest_service("/", ServeDir::new("dist"))
-        .nest_service("/download", ServeDir::new(".cache/serve"));
-
-    let app = Router::new()
-        .merge(with_big_body)
-        .merge(base)
         .layer(TraceLayer::new_for_http());
 
     // Server creation
@@ -147,7 +143,34 @@ async fn upload_to_zip(
 
     writer.close().await.unwrap();
 
-    Ok(Redirect::to(&format!("/link.html?link={}.zip", cache_name)))
+    Ok(Redirect::to(&format!("/link.html?link={}", cache_name)))
+}
+
+async fn download(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    State(state): State<AppState>,
+) -> Result<axum::response::Response, (StatusCode, String)> {
+    let mut records = state.records.lock().await;
+
+    if let Some(record) = records.get_mut(&id) {
+        if record.can_be_downloaded() {
+            record.downloads += 1;
+
+            let file = tokio::fs::File::open(&record.file).await.unwrap();
+
+            return Ok(axum::http::Response::builder()
+                .header("Content-Type", "application/zip")
+                .body(StreamBody::new(ReaderStream::new(file)))
+                .unwrap()
+                .into_response());
+        } else {
+            let _ = tokio::fs::remove_file(&record.file);
+            records.remove(&id);
+            write_to_cache(&records).await.unwrap();
+        }
+    }
+
+    Ok(Redirect::to("/404.html").into_response())
 }
 
 #[inline]
