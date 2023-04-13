@@ -2,9 +2,10 @@ use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 
 use axum::body::StreamBody;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::extract::{ConnectInfo, State};
+use axum::http::{Request, StatusCode};
+use axum::middleware::{Next, self};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{
     extract::{DefaultBodyLimit, Multipart},
@@ -74,17 +75,24 @@ async fn main() -> io::Result<()> {
         ))
         .with_state(state)
         .nest_service("/", ServeDir::new("dist"))
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn(log_source));
 
     // Server creation
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     tracing::debug!("listening on http://{}/", addr);
     axum::Server::bind(&addr)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
 
     Ok(())
+}
+
+async fn log_source<B>(ConnectInfo(addr): ConnectInfo<SocketAddr>, req: Request<B>, next: Next<B>) -> Response {
+    tracing::info!("{}", addr);
+
+    next.run(req).await
 }
 
 async fn upload_to_zip(
