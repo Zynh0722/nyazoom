@@ -23,6 +23,14 @@
                 link_el.innerHTML = link;
             }
         });
+
+        function clipboard() {
+            let copyText = document.getElementById("link");
+
+            navigator.clipboard.writeText(copyText.href);
+
+            alert("Copied: " + copyText.href);
+        }
     </script>
 </head>
 
@@ -30,6 +38,8 @@
     <div class="link-wrapper">
         <a id="link" href=""></a>
     </div>
+
+    <button class="return-button" onclick="clipboard()">Copy to Clipboard</button>
 
     <a href="/" class="return-button">Return to home</a>
 </body>
