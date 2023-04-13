@@ -27,9 +27,7 @@
         function clipboard() {
             let copyText = document.getElementById("link");
 
-            navigator.clipboard.writeText(copyText.href);
-
-            alert("Copied: " + copyText.href);
+            navigator.clipboard.writeText(copyText.href).then(() => alert("Copied: " + copyText.href));
         }
     </script>
 </head>
