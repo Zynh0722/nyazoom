@@ -272,7 +272,7 @@ fn _bytes_to_human_readable(bytes: u64) -> String {
 
 struct ForwardedFor(String);
 
-static FF_TEXT: &str = "f-forwarded-for";
+static FF_TEXT: &str = "x-forwarded-for";
 static FF_NAME: HeaderName = HeaderName::from_static(FF_TEXT);
 
 impl Header for ForwardedFor {
