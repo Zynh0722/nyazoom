@@ -4,9 +4,10 @@ use async_zip::{Compression, ZipEntryBuilder};
 use axum::body::StreamBody;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{Request, StatusCode};
-use axum::middleware::{Next, self};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::TypedHeader;
 use axum::{
     extract::{DefaultBodyLimit, Multipart},
     response::Redirect,
@@ -15,6 +16,7 @@ use axum::{
 
 use futures::TryStreamExt;
 
+use headers::{Header, HeaderName, HeaderValue};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
@@ -89,8 +91,23 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
-async fn log_source<B>(ConnectInfo(addr): ConnectInfo<SocketAddr>, req: Request<B>, next: Next<B>) -> Response {
-    tracing::info!("{}", addr);
+// async fn log_source<B>(
+//     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+//     req: Request<B>,
+//     next: Next<B>,
+// ) -> Response {
+//     tracing::info!("{}", addr);
+//
+//     next.run(req).await
+// }
+
+async fn log_source<B>(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    TypedHeader(ForwardedFor(forwarded_for)): TypedHeader<ForwardedFor>,
+    req: Request<B>,
+    next: Next<B>,
+) -> Response {
+    tracing::info!("{} : {}", addr, forwarded_for);
 
     next.run(req).await
 }
@@ -251,4 +268,34 @@ fn _bytes_to_human_readable(bytes: u64) -> String {
     }
 
     format!("{:.2} {}", running, UNITS[count - 1])
+}
+
+struct ForwardedFor(String);
+
+static FF_TEXT: &str = "f-forwarded-for";
+static FF_NAME: HeaderName = HeaderName::from_static(FF_TEXT);
+
+impl Header for ForwardedFor {
+    fn name() -> &'static HeaderName {
+        &FF_NAME
+    }
+
+    fn decode<'i, I>(values: &mut I) -> Result<Self, headers::Error>
+    where
+        Self: Sized,
+        I: Iterator<Item = &'i headers::HeaderValue>,
+    {
+        let value = values
+            .next()
+            .ok_or_else(headers::Error::invalid)?
+            .to_str()
+            .map_err(|_| headers::Error::invalid())?
+            .to_owned();
+
+        Ok(ForwardedFor(value))
+    }
+
+    fn encode<E: Extend<headers::HeaderValue>>(&self, values: &mut E) {
+        values.extend(std::iter::once(HeaderValue::from_str(&self.0).unwrap()));
+    }
 }
