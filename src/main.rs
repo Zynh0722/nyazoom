@@ -5,7 +5,7 @@ use axum::{
     extract::{ConnectInfo, DefaultBodyLimit, Multipart, State},
     http::{Request, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router, TypedHeader,
 };
@@ -31,8 +31,11 @@ mod cache;
 mod nyazoom_headers;
 mod state;
 mod util;
+mod views;
 
 use state::{AppState, UploadRecord};
+
+use crate::views::Welcome;
 
 pub mod error {
     use std::io::{Error, ErrorKind};
@@ -53,6 +56,8 @@ async fn main() -> io::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // tracing::info!("{}", get_cat_fact().await);
+
     // uses create_dir_all to create both .cache and serve inside it in one go
     util::make_dir(".cache/serve").await?;
 
@@ -60,6 +65,7 @@ async fn main() -> io::Result<()> {
 
     // Router Setup
     let app = Router::new()
+        .route("/", get(welcome))
         .route("/upload", post(upload_to_zip))
         .route("/download/:id", get(download))
         .layer(DefaultBodyLimit::disable())
@@ -67,7 +73,7 @@ async fn main() -> io::Result<()> {
             10 * 1024 * 1024 * 1024, // 10GiB
         ))
         .with_state(state)
-        .nest_service("/", ServeDir::new("dist"))
+        .nest_service("/dist", ServeDir::new("dist"))
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn(log_source));
 
@@ -80,6 +86,13 @@ async fn main() -> io::Result<()> {
         .unwrap();
 
     Ok(())
+}
+
+async fn welcome() -> impl IntoResponse {
+    let cat_fact = views::get_cat_fact().await;
+    Html(leptos::ssr::render_to_string(move |cx| {
+        leptos::view! { cx, <Welcome fact=cat_fact /> }
+    }))
 }
 
 async fn log_source<B>(

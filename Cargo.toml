@@ -8,12 +8,14 @@ edition = "2021"
 [dependencies]
 async-bincode = { version = "0.7.0", features = ["tokio"] }
 async_zip = { version = "0.0.13", features = ["deflate", "tokio", "tokio-fs", "async-compression"] }
-axum = { version = "0.6.12", features = ["multipart", "http2", "headers"] }
+axum = { version = "0.6.12", features = ["multipart", "http2", "headers", "macros"] }
 bincode = "1.3.3"
 chrono = { version = "0.4.24", features = ["serde"] }
 futures = "0.3.28"
 headers = "0.3.8"
+leptos = { version = "0.4.6", features = ["ssr", "nightly", "tracing", "default-tls"] }
 rand = { version = "0.8.5", features = ["small_rng"] }
+reqwest = { version = "0.11.18", features = ["json", "native-tls", "blocking"] }
 sanitize-filename-reader-friendly = "2.2.1"
 serde = { version = "1.0.160", features = ["serde_derive", "derive"] }
 serde_derive = "1.0.160"
