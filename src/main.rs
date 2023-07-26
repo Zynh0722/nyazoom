@@ -162,7 +162,10 @@ async fn upload_to_zip(
 
     writer.close().await.unwrap();
 
-    Ok(Redirect::to(&format!("/link.html?link={}", cache_name)))
+    Ok(Redirect::to(&format!(
+        "/dist/link.html?link={}",
+        cache_name
+    )))
 }
 
 async fn download(
