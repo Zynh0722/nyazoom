@@ -57,18 +57,33 @@ async fn main() -> io::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Spawn a repeating task that will clean files periodically
-    tokio::spawn(async {
-        loop {
-            tracing::info!("Cleaning Sweep!");
-            tokio::time::sleep(Duration::from_secs(15 * 60)).await
-        }
-    });
-
     // uses create_dir_all to create both .cache and serve inside it in one go
     util::make_dir(".cache/serve").await?;
 
     let state = cache::fetch_cache().await;
+
+    // Spawn a repeating task that will clean files periodically
+    tokio::spawn({
+        let state = state.clone();
+        async move {
+            loop {
+                tracing::info!("Cleaning Sweep!");
+
+                let mut records = state.records.lock().await;
+
+                for (key, record) in records.clone().into_iter() {
+                    if !record.can_be_downloaded() {
+                        tracing::info!("{:?} should be culled", record);
+                        let _ = tokio::fs::remove_file(&record.file).await;
+                        records.remove(key.as_str());
+                        cache::write_to_cache(&records).await.unwrap();
+                    }
+                }
+
+                tokio::time::sleep(Duration::from_secs(15 * 60)).await
+            }
+        }
+    });
 
     // Router Setup
     let app = Router::new()
