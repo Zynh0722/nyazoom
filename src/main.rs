@@ -7,16 +7,17 @@ use axum::{
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
-    Router, TypedHeader,
+    Json, Router, TypedHeader,
 };
 
 use futures::TryStreamExt;
 
+use leptos::IntoView;
 use nyazoom_headers::ForwardedFor;
 
 use sanitize_filename_reader_friendly::sanitize;
 
-use std::{io, net::SocketAddr, path::Path};
+use std::{io, net::SocketAddr, path::Path, time::Duration};
 
 use tokio_util::{
     compat::FuturesAsyncWriteCompatExt,
@@ -35,7 +36,7 @@ mod views;
 
 use state::{AppState, UploadRecord};
 
-use crate::views::Welcome;
+use crate::views::{DownloadLink, Welcome};
 
 pub mod error {
     use std::io::{Error, ErrorKind};
@@ -56,7 +57,13 @@ async fn main() -> io::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // tracing::info!("{}", get_cat_fact().await);
+    // Spawn a repeating task that will clean files periodically
+    tokio::spawn(async {
+        loop {
+            tracing::info!("Cleaning Sweep!");
+            tokio::time::sleep(Duration::from_secs(15 * 60)).await
+        }
+    });
 
     // uses create_dir_all to create both .cache and serve inside it in one go
     util::make_dir(".cache/serve").await?;
@@ -67,13 +74,16 @@ async fn main() -> io::Result<()> {
     let app = Router::new()
         .route("/", get(welcome))
         .route("/upload", post(upload_to_zip))
+        .route("/records", get(records))
+        .route("/records/links", get(records_links))
         .route("/download/:id", get(download))
+        .route("/link/:id", get(link))
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(
             10 * 1024 * 1024 * 1024, // 10GiB
         ))
         .with_state(state)
-        .nest_service("/dist", ServeDir::new("dist"))
+        .fallback_service(ServeDir::new("dist"))
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn(log_source));
 
@@ -93,6 +103,49 @@ async fn welcome() -> impl IntoResponse {
     Html(leptos::ssr::render_to_string(move |cx| {
         leptos::view! { cx, <Welcome fact=cat_fact /> }
     }))
+}
+
+async fn records(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.records.lock().await.clone())
+}
+
+async fn records_links(State(state): State<AppState>) -> impl IntoResponse {
+    let records = state.records.lock().await.clone();
+    Html(leptos::ssr::render_to_string(move |cx| {
+        leptos::view! { cx,
+            <ul>
+                {records
+                    .iter()
+                    .map(|(key, _)|
+                        leptos::view! { cx, <li><a href="/link/{key}">{key}</a></li> })
+                    .collect::<Vec<_>>()}
+            </ul>
+        }
+    }))
+}
+
+async fn link(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    State(state): State<AppState>,
+) -> Result<Html<String>, Redirect> {
+    let mut records = state.records.lock().await;
+
+    if let Some(record) = records.get_mut(&id) {
+        if record.can_be_downloaded() {
+            return Ok(Html(leptos::ssr::render_to_string({
+                let record = record.clone();
+                |cx| {
+                    leptos::view! { cx, <DownloadLink id=id record=record /> }
+                }
+            })));
+        } else {
+            let _ = tokio::fs::remove_file(&record.file).await;
+            records.remove(&id);
+            cache::write_to_cache(&records).await.unwrap();
+        }
+    }
+
+    Err(Redirect::to(&format!("/404.html")))
 }
 
 async fn log_source<B>(
@@ -162,10 +215,7 @@ async fn upload_to_zip(
 
     writer.close().await.unwrap();
 
-    Ok(Redirect::to(&format!(
-        "/dist/link.html?link={}",
-        cache_name
-    )))
+    Ok(Redirect::to(&format!("/link/{}", cache_name)))
 }
 
 async fn download(

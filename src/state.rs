@@ -4,12 +4,12 @@ use std::{
     sync::Arc,
 };
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 #[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadRecord {
     pub uploaded: DateTime<Utc>,
     pub file: PathBuf,
@@ -26,7 +26,10 @@ impl UploadRecord {
     }
 
     pub fn can_be_downloaded(&self) -> bool {
-        self.downloads < self.max_downloads
+        let now = Utc::now();
+        let dur_since_upload = now.signed_duration_since(self.uploaded);
+
+        dur_since_upload < Duration::days(3) && self.downloads < self.max_downloads
     }
 }
 
@@ -36,7 +39,7 @@ impl Default for UploadRecord {
             uploaded: Utc::now(),
             file: Path::new("").to_owned(),
             downloads: 0,
-            max_downloads: 1,
+            max_downloads: 5,
         }
     }
 }
