@@ -1,5 +1,5 @@
 use futures::TryFutureExt;
-use leptos::{Children, IntoView};
+use leptos::{component, view, Children, IntoAttribute, IntoView, Scope};
 use serde::Deserialize;
 
 use crate::state::UploadRecord;
@@ -19,36 +19,77 @@ pub async fn get_cat_fact() -> String {
 
 // {https://api.thecatapi.com/v1/images/search?size=small&format=src}
 // {https://cataas.com/cat?width=250&height=250}
-#[leptos::component]
-pub fn Welcome(cx: leptos::Scope, fact: String) -> impl IntoView {
-    leptos::view! { cx,
+#[component]
+pub fn Welcome(cx: Scope, fact: String) -> impl IntoView {
+    view! { cx,
         <HtmxPage>
-            <h1>NyaZoom<sup>2</sup></h1>
             <div class="form-wrapper">
-                <form action="/upload" method="post" enctype="multipart/form-data" class="main-form">
-                    <div class="cat-img-wrapper">
-                        <img class="cat-img" src="https://api.thecatapi.com/v1/images/search?size=small&format=src" />
-                    </div>
-
-                    <input type="file" id="file" name="file" data-multiple-caption="{count} files selected" multiple />
-                    <label for="file">Select Files</label>
-
-                    <input type="submit" value="Get Link~" />
-                    <p id="cat-fact">{fact}</p>
-                </form>
+                <WelcomeView fact />
             </div>
         </HtmxPage>
     }
 }
 
+#[component]
+pub fn WelcomeView(cx: Scope, fact: String) -> impl IntoView {
+    view! {
+        cx,
+        <form id="form" hx-swap="outerHTML" hx-post="/upload" hx-encoding="multipart/form-data" class="column-container">
+            <div class="cat-img-wrapper">
+                <img class="cat-img" src="https://api.thecatapi.com/v1/images/search?size=small&format=src" />
+            </div>
+            <input type="file" id="file" name="file" data-multiple-caption="{{count}} files selected" multiple />
+            <label for="file">Select Files</label>
+
+            <input type="submit" value="Get Link~" />
+            <p id="cat-fact">{fact}</p>
+            <progress id="progress" class="htmx-indicator" value="0" max="100"></progress>
+        </form>
+        <script src="/scripts/loading_progress.js" />
+    }
+}
+
 // <link href="../dist/css/link.css" rel="stylesheet" />
 // #TODO: Handle pushing cleaner
-#[leptos::component]
-pub fn DownloadLink(cx: leptos::Scope, id: String, record: UploadRecord) -> impl IntoView {
+#[component]
+pub fn DownloadLinkPage(cx: Scope, id: String, record: UploadRecord) -> impl IntoView {
+    view! { cx,
+        <HtmxPage>
+            <div class="form-wrapper">
+                <LinkView id record />
+            </div>
+        </HtmxPage>
+    }
+}
+
+#[component]
+pub fn HtmxPage(cx: Scope, children: Children) -> impl IntoView {
+    view! { cx,
+        <head>
+            <title>Nyazoom</title>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <link href="/css/main.css" rel="stylesheet" />
+            <link href="/css/link.css" rel="stylesheet" />
+            <script src="/scripts/file_label.js" />
+            <script src="/scripts/link.js" />
+            <script src="https://unpkg.com/htmx.org@1.9.4" integrity="sha384-zUfuhFKKZCbHTY6aRR46gxiqszMk5tcHjsVFxnUo8VMus4kHGVdIYVbOYYNlKmHV" crossorigin="anonymous"></script>
+        </head>
+
+        <body>
+            <h1>NyaZoom<sup>2</sup></h1>
+            {children(cx)}
+        </body>
+    }
+}
+
+#[component]
+pub fn LinkView(cx: Scope, id: String, record: UploadRecord) -> impl IntoView {
     let downloads_remaining = record.max_downloads - record.downloads;
     let plural = if downloads_remaining > 1 { "s" } else { "" };
-    leptos::view! { cx,
-        <HtmxPage>
+    view! {
+        cx,
+        <div class="column-container">
             <div class="link-wrapper">
                 <a id="link" href=format!("/download/{id}")>Download Now!</a>
             </div>
@@ -60,25 +101,6 @@ pub fn DownloadLink(cx: leptos::Scope, id: String, record: UploadRecord) -> impl
 
 
             <a href="/" class="return-button">Return to home</a>
-        </HtmxPage>
-    }
-}
-
-#[leptos::component]
-pub fn HtmxPage(cx: leptos::Scope, children: Children) -> impl IntoView {
-    leptos::view! { cx,
-        <head>
-            <title>Nyazoom</title>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <link href="/css/main.css" rel="stylesheet" />
-            <link href="/css/link.css" rel="stylesheet" />
-            <script src="/scripts/file_label.js" />
-            <script src="/scripts/link.js" />
-        </head>
-
-        <body>
-            {children(cx)}
-        </body>
+        </div>
     }
 }

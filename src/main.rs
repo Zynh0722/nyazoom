@@ -3,9 +3,9 @@ use async_zip::{tokio::write::ZipFileWriter, Compression, ZipEntryBuilder};
 use axum::{
     body::StreamBody,
     extract::{ConnectInfo, DefaultBodyLimit, Multipart, State},
-    http::{Request, StatusCode},
+    http::{Request, Response, StatusCode},
     middleware::{self, Next},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Redirect},
     routing::{get, post},
     Json, Router, TypedHeader,
 };
@@ -36,7 +36,7 @@ mod views;
 
 use state::{AppState, UploadRecord};
 
-use crate::views::{DownloadLink, Welcome};
+use crate::views::{DownloadLinkPage, LinkView, Welcome};
 
 pub mod error {
     use std::io::{Error, ErrorKind};
@@ -67,6 +67,7 @@ async fn main() -> io::Result<()> {
         let state = state.clone();
         async move {
             loop {
+                tokio::time::sleep(Duration::from_secs(15 * 60)).await;
                 tracing::info!("Cleaning Sweep!");
 
                 let mut records = state.records.lock().await;
@@ -79,8 +80,6 @@ async fn main() -> io::Result<()> {
                         cache::write_to_cache(&records).await.unwrap();
                     }
                 }
-
-                tokio::time::sleep(Duration::from_secs(15 * 60)).await
             }
         }
     });
@@ -150,7 +149,7 @@ async fn link(
             return Ok(Html(leptos::ssr::render_to_string({
                 let record = record.clone();
                 |cx| {
-                    leptos::view! { cx, <DownloadLink id=id record=record /> }
+                    leptos::view! { cx, <DownloadLinkPage id=id record=record /> }
                 }
             })));
         } else {
@@ -168,7 +167,7 @@ async fn log_source<B>(
     forwarded_for: Option<TypedHeader<ForwardedFor>>,
     req: Request<B>,
     next: Next<B>,
-) -> Response {
+) -> impl IntoResponse {
     tracing::info!("{} : {:?}", addr, forwarded_for);
 
     next.run(req).await
@@ -177,7 +176,7 @@ async fn log_source<B>(
 async fn upload_to_zip(
     State(state): State<AppState>,
     mut body: Multipart,
-) -> Result<Redirect, (StatusCode, String)> {
+) -> Result<Response<String>, (StatusCode, String)> {
     tracing::debug!("{:?}", *state.records.lock().await);
 
     let cache_name = util::get_random_name(10);
@@ -222,7 +221,8 @@ async fn upload_to_zip(
     }
 
     let mut records = state.records.lock().await;
-    records.insert(cache_name.clone(), UploadRecord::new(archive_path));
+    let record = UploadRecord::new(archive_path);
+    records.insert(cache_name.clone(), record.clone());
 
     cache::write_to_cache(&records)
         .await
@@ -230,7 +230,17 @@ async fn upload_to_zip(
 
     writer.close().await.unwrap();
 
-    Ok(Redirect::to(&format!("/link/{}", cache_name)))
+    let id = cache_name;
+    let response = Response::builder()
+        .status(200)
+        .header("Content-Type", "text/html")
+        .header("HX-Push-Url", format!("/link/{}", &id))
+        .body(leptos::ssr::render_to_string(|cx| {
+            leptos::view! { cx, <LinkView id record /> }
+        }))
+        .unwrap();
+
+    Ok(response)
 }
 
 async fn download(

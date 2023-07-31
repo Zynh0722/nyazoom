@@ -10,7 +10,7 @@ body {
   margin: 0;
 }
 
-.main-form {
+.column-container {
   display: flex;
   flex-direction: column;
   justify-content: center;
