@@ -26,8 +26,7 @@ impl UploadRecord {
     }
 
     pub fn can_be_downloaded(&self) -> bool {
-        let now = Utc::now();
-        let dur_since_upload = now.signed_duration_since(self.uploaded);
+        let dur_since_upload = Utc::now().signed_duration_since(self.uploaded);
 
         dur_since_upload < Duration::days(3) && self.downloads < self.max_downloads
     }
