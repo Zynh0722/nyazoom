@@ -6,12 +6,13 @@ use axum::{
     http::{Request, Response, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router, TypedHeader,
 };
 
 use futures::TryStreamExt;
 
+use headers::HeaderMap;
 use leptos::IntoView;
 use nyazoom_headers::ForwardedFor;
 
@@ -36,7 +37,8 @@ mod views;
 
 use state::{AppState, UploadRecord};
 
-use crate::views::{DownloadLinkPage, LinkView, Welcome};
+use crate::state::AsyncRemoveRecord;
+use crate::views::{DownloadLinkPage, HtmxPage, LinkView, Welcome};
 
 pub mod error {
     use std::io::{Error, ErrorKind};
@@ -74,10 +76,8 @@ async fn main() -> io::Result<()> {
 
                 for (key, record) in records.clone().into_iter() {
                     if !record.can_be_downloaded() {
-                        tracing::info!("{:?} should be culled", record);
-                        let _ = tokio::fs::remove_file(&record.file).await;
-                        records.remove(key.as_str());
-                        cache::write_to_cache(&records).await.unwrap();
+                        tracing::info!("culling: {:?}", record);
+                        records.remove_record(&key).await.unwrap();
                     }
                 }
             }
@@ -92,6 +92,8 @@ async fn main() -> io::Result<()> {
         .route("/records/links", get(records_links))
         .route("/download/:id", get(download))
         .route("/link/:id", get(link))
+        .route("/link/:id", delete(link_delete))
+        .route("/link/:id/remaining", get(remaining))
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(
             10 * 1024 * 1024 * 1024, // 10GiB
@@ -112,6 +114,24 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
+async fn remaining(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let records = state.records.lock().await;
+    if let Some(record) = records.get(&id) {
+        let downloads_remaining = record.downloads_remaining();
+        let plural = if downloads_remaining > 1 { "s" } else { "" };
+        let out = format!(
+            "You have {} download{} remaining!",
+            downloads_remaining, plural
+        );
+        Html(out)
+    } else {
+        Html("?".to_string())
+    }
+}
+
 async fn welcome() -> impl IntoResponse {
     let cat_fact = views::get_cat_fact().await;
     Html(leptos::ssr::render_to_string(move |cx| {
@@ -123,43 +143,69 @@ async fn records(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.records.lock().await.clone())
 }
 
+// This function is to remain ugly until that time in which I properly hide
+// this behind some kind of authentication
 async fn records_links(State(state): State<AppState>) -> impl IntoResponse {
     let records = state.records.lock().await.clone();
     Html(leptos::ssr::render_to_string(move |cx| {
         leptos::view! { cx,
-            <ul>
-                {records
-                    .iter()
-                    .map(|(key, _)|
-                        leptos::view! { cx, <li><a href="/link/{key}">{key}</a></li> })
-                    .collect::<Vec<_>>()}
-            </ul>
+            <HtmxPage>
+                <div class="form-wrapper">
+                    <div class="column-container">
+                        <ul>
+                            {records.keys().map(|key| leptos::view! { cx,
+                                        <li class="link-wrapper">
+                                            <a href="/link/{key}">{key}</a>
+                                            <button style="margin-left: 1em;"
+                                                hx-target="closest .link-wrapper"
+                                                hx-swap="outerHTML"
+                                                hx-delete="/link/{key}">X</button>
+                                        </li>
+                                    })
+                                .collect::<Vec<_>>()}
+                        </ul>
+                    </div>
+                </div>
+            </HtmxPage>
         }
     }))
 }
 
 async fn link(
     axum::extract::Path(id): axum::extract::Path<String>,
-    State(state): State<AppState>,
+    State(mut state): State<AppState>,
 ) -> Result<Html<String>, Redirect> {
-    let mut records = state.records.lock().await;
+    {
+        let mut records = state.records.lock().await;
 
-    if let Some(record) = records.get_mut(&id) {
-        if record.can_be_downloaded() {
-            return Ok(Html(leptos::ssr::render_to_string({
-                let record = record.clone();
-                |cx| {
-                    leptos::view! { cx, <DownloadLinkPage id=id record=record /> }
-                }
-            })));
-        } else {
-            let _ = tokio::fs::remove_file(&record.file).await;
-            records.remove(&id);
-            cache::write_to_cache(&records).await.unwrap();
+        if let Some(record) = records.get_mut(&id) {
+            if record.can_be_downloaded() {
+                return Ok(Html(leptos::ssr::render_to_string({
+                    let record = record.clone();
+                    |cx| {
+                        leptos::view! { cx, <DownloadLinkPage id=id record=record /> }
+                    }
+                })));
+            }
         }
     }
 
+    // TODO: This....
+    state.remove_record(&id).await.unwrap();
+
     Err(Redirect::to(&format!("/404.html")))
+}
+
+async fn link_delete(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    State(mut state): State<AppState>,
+) -> Result<Html<String>, (StatusCode, String)> {
+    state
+        .remove_record(&id)
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+    Ok(Html("".to_string()))
 }
 
 async fn log_source<B>(
@@ -245,27 +291,38 @@ async fn upload_to_zip(
 
 async fn download(
     axum::extract::Path(id): axum::extract::Path<String>,
-    State(state): State<AppState>,
+    headers: HeaderMap,
+    State(mut state): State<AppState>,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
-    let mut records = state.records.lock().await;
-
-    if let Some(record) = records.get_mut(&id) {
-        if record.can_be_downloaded() {
-            record.downloads += 1;
-
-            let file = tokio::fs::File::open(&record.file).await.unwrap();
-
+    {
+        let mut records = state.records.lock().await;
+        tracing::info!("{headers:?}");
+        if headers.get("hx-request").is_some() {
             return Ok(axum::http::Response::builder()
-                .header("Content-Type", "application/zip")
-                .body(StreamBody::new(ReaderStream::new(file)))
+                .header("HX-Redirect", format!("/download/{id}"))
+                .status(204)
+                .body("".to_owned())
                 .unwrap()
                 .into_response());
-        } else {
-            let _ = tokio::fs::remove_file(&record.file).await;
-            records.remove(&id);
-            cache::write_to_cache(&records).await.unwrap();
+        }
+
+        if let Some(record) = records.get_mut(&id) {
+            if record.can_be_downloaded() {
+                record.downloads += 1;
+
+                let file = tokio::fs::File::open(&record.file).await.unwrap();
+
+                return Ok(axum::response::Response::builder()
+                    .header("Content-Type", "application/zip")
+                    .body(StreamBody::new(ReaderStream::new(file)))
+                    .unwrap()
+                    .into_response());
+            }
         }
     }
+
+    // TODO: This....
+    state.remove_record(&id).await.unwrap();
 
     Ok(Redirect::to("/404.html").into_response())
 }

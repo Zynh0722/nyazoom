@@ -1242,6 +1242,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptos_meta"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ab2fcfe2ae8f14a58798007dd90126c60f529f265e5fa0bf816e047b60b753c"
+dependencies = [
+ "cfg-if",
+ "indexmap 2.0.0",
+ "leptos",
+ "tracing",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "leptos_reactive"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1524,6 +1538,7 @@ name = "nyazoom"
 version = "0.1.0"
 dependencies = [
  "async-bincode",
+ "async-trait",
  "async_zip",
  "axum",
  "bincode",
@@ -1531,6 +1546,7 @@ dependencies = [
  "futures",
  "headers",
  "leptos",
+ "leptos_meta",
  "leptos_router",
  "rand",
  "reqwest",

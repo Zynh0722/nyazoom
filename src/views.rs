@@ -1,5 +1,5 @@
 use futures::TryFutureExt;
-use leptos::{component, view, Children, IntoAttribute, IntoView, Scope};
+use leptos::{component, view, Children, IntoView, Scope};
 use serde::Deserialize;
 
 use crate::state::UploadRecord;
@@ -91,11 +91,11 @@ pub fn LinkView(cx: Scope, id: String, record: UploadRecord) -> impl IntoView {
         cx,
         <div class="column-container">
             <div class="link-wrapper">
-                <a id="link" href=format!("/download/{id}")>Download Now!</a>
+                <a id="link" hx-get="/download/{id}" href="/download/{id}">Download Now!</a>
             </div>
 
-            <div class="link-wrapper">
-                You have {record.max_downloads - record.downloads} download{plural} remaining!
+            <div class="link-wrapper" hx-get="/link/{id}/remaining" hx-trigger="click from:#link delay:0.2s, every 10s" >
+                You have {record.downloads_remaining()} download{plural} remaining!
             </div>
             <button class="return-button" onclick="clipboard()">Copy to Clipboard</button>
 
