@@ -6,7 +6,7 @@ use axum::{
     http::{Request, Response, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router, TypedHeader,
 };
 
@@ -91,8 +91,7 @@ async fn main() -> io::Result<()> {
         .route("/records", get(records))
         .route("/records/links", get(records_links))
         .route("/download/:id", get(download))
-        .route("/link/:id", get(link))
-        .route("/link/:id", delete(link_delete))
+        .route("/link/:id", get(link).delete(link_delete))
         .route("/link/:id/remaining", get(remaining))
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(
@@ -178,7 +177,10 @@ async fn link(
     {
         let mut records = state.records.lock().await;
 
-        if let Some(record) = records.get_mut(&id) {
+        if let Some(record) = records
+            .get_mut(&id)
+            .filter(|record| record.can_be_downloaded())
+        {
             if record.can_be_downloaded() {
                 return Ok(Html(leptos::ssr::render_to_string({
                     let record = record.clone();
@@ -292,11 +294,10 @@ async fn upload_to_zip(
 async fn download(
     axum::extract::Path(id): axum::extract::Path<String>,
     headers: HeaderMap,
-    State(mut state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
     {
         let mut records = state.records.lock().await;
-        tracing::info!("{headers:?}");
         if headers.get("hx-request").is_some() {
             return Ok(axum::http::Response::builder()
                 .header("HX-Redirect", format!("/download/{id}"))
@@ -306,23 +307,23 @@ async fn download(
                 .into_response());
         }
 
-        if let Some(record) = records.get_mut(&id) {
-            if record.can_be_downloaded() {
-                record.downloads += 1;
+        if let Some(record) = records
+            .get_mut(&id)
+            .filter(|record| record.can_be_downloaded())
+        {
+            record.downloads += 1;
 
-                let file = tokio::fs::File::open(&record.file).await.unwrap();
+            let file = tokio::fs::File::open(&record.file).await.unwrap();
 
-                return Ok(axum::response::Response::builder()
-                    .header("Content-Type", "application/zip")
-                    .body(StreamBody::new(ReaderStream::new(file)))
-                    .unwrap()
-                    .into_response());
-            }
+            return Ok(axum::response::Response::builder()
+                .header("Content-Type", "application/zip")
+                .body(StreamBody::new(ReaderStream::new(file)))
+                .unwrap()
+                .into_response());
+        } else {
+            records.remove_record(&id).await.unwrap()
         }
     }
-
-    // TODO: This....
-    state.remove_record(&id).await.unwrap();
 
     Ok(Redirect::to("/404.html").into_response())
 }

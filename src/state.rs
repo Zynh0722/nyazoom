@@ -1,5 +1,6 @@
 use std::{
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
+    io::ErrorKind,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -72,26 +73,25 @@ pub trait AsyncRemoveRecord {
 impl AsyncRemoveRecord for AppState {
     async fn remove_record(&mut self, id: &String) -> Result<(), std::io::Error> {
         let mut records = self.records.lock().await;
-
-        if let Some(record) = records.get_mut(id) {
-            tokio::fs::remove_file(&record.file).await?;
-            records.remove(id);
-            cache::write_to_cache(&records).await?;
-        }
-
-        Ok(())
+        records.remove_record(id).await
     }
 }
 
 #[async_trait]
 impl AsyncRemoveRecord for HashMap<String, UploadRecord> {
     async fn remove_record(&mut self, id: &String) -> Result<(), std::io::Error> {
-        if let Some(record) = self.get_mut(id) {
-            tokio::fs::remove_file(&record.file).await?;
-            self.remove(id);
-            cache::write_to_cache(&self).await?;
-        }
+        match self.entry(id.clone()) {
+            Entry::Occupied(entry) => {
+                tokio::fs::remove_file(&entry.get().file).await?;
+                entry.remove_entry();
+                cache::write_to_cache(&self).await?;
 
-        Ok(())
+                Ok(())
+            }
+            Entry::Vacant(_) => Err(std::io::Error::new(
+                ErrorKind::Other,
+                "No UploadRecord Found",
+            )),
+        }
     }
 }

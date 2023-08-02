@@ -91,7 +91,7 @@ pub fn LinkView(cx: Scope, id: String, record: UploadRecord) -> impl IntoView {
         cx,
         <div class="column-container">
             <div class="link-wrapper">
-                <a id="link" hx-get="/download/{id}" href="/download/{id}">Download Now!</a>
+                <a id="link" href="/download/{id}">Download Now!</a>
             </div>
 
             <div class="link-wrapper" hx-get="/link/{id}/remaining" hx-trigger="click from:#link delay:0.2s, every 10s" >
